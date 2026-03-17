@@ -415,6 +415,8 @@ input[type=range]{padding:3px 0;cursor:pointer;width:100%;accent-color:var(--cya
     <div class="sep"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn" onclick="saveConfig()">💾 Guardar y actualizar perfil</button>
+      <button class="btn" onclick="exportData()" style="background:rgba(0,255,136,0.1);border-color:var(--green);color:var(--green)">📤 Exportar progreso (.json)</button>
+      <label class="btn" style="background:rgba(0,170,255,0.1);border-color:var(--blue);color:var(--blue);cursor:pointer">📥 Importar progreso (.json)<input type="file" accept=".json" onchange="importData(event)" style="display:none"></label>
       <button class="btn btn-outline btn-sm" onclick="if(confirm('¿Reiniciar todo el progreso?')){resetAll()}">⚠ Reiniciar todo</button>
     </div>
   </div>
@@ -623,8 +625,36 @@ let S={
   lastDay:null,lastWeek:null,lastMonth:null,
 };
 
-function load(){try{const d=localStorage.getItem('rpg_sys_v2');if(d)S={...S,...JSON.parse(d)};}catch(e){}}
-function save(){try{localStorage.setItem('rpg_sys_v2',JSON.stringify(S));}catch(e){}}
+function load(){
+  try{
+    const d=localStorage.getItem('rpg_sys_v2');
+    if(d){
+      const saved=JSON.parse(d);
+      // Deep merge — preserve all nested objects
+      S.name=saved.name||S.name;
+      S.level=saved.level||S.level;
+      S.stats=Object.assign({},S.stats,saved.stats||{});
+      S.statBonus=Object.assign({},saved.statBonus||{});
+      S.skills=Object.assign({},saved.skills||{});
+      S.dungeons=Object.assign({},saved.dungeons||{});
+      S.missions=Object.assign({},saved.missions||{});
+      S.log=saved.log||[];
+      // Only restore dates if they exist in save — never default to null
+      if(saved.lastDay) S.lastDay=saved.lastDay;
+      if(saved.lastWeek) S.lastWeek=saved.lastWeek;
+      if(saved.lastMonth) S.lastMonth=saved.lastMonth;
+    }
+  }catch(e){console.warn('Load error:',e);}
+}
+function save(){
+  try{
+    const{day,week,month}=getDateKeys();
+    S.lastDay=day;
+    S.lastWeek=week;
+    S.lastMonth=month;
+    localStorage.setItem('rpg_sys_v2',JSON.stringify(S));
+  }catch(e){console.warn('Save error:',e);}
+}
 
 // ═══════════════════════════════════════════════════════
 // LOGIC
@@ -1411,6 +1441,49 @@ function roundRect(ctx,x,y,w,h,r){
 })();
 
 // ═══════════════════════════════════════════════════════
+// EXPORTAR / IMPORTAR PROGRESO
+// ═══════════════════════════════════════════════════════
+function exportData(){
+  const data=JSON.stringify(S, null, 2);
+  const blob=new Blob([data],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const date=new Date().toISOString().slice(0,10);
+  a.href=url;
+  a.download=`rpg-progreso-${date}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  notify('📤 Progreso exportado correctamente');
+  addLog(`Progreso exportado (${date})`,'gain');
+}
+
+function importData(e){
+  const file=e.target.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(ev){
+    try{
+      const data=JSON.parse(ev.target.result);
+      // Validate it looks like our save data
+      if(typeof data!=='object'||!data.skills){
+        notify('⚠ Archivo inválido — no es un save del RPG','',true);
+        return;
+      }
+      S={...S,...data};
+      save();
+      renderAll();
+      notify('📥 ¡Progreso importado correctamente! Bienvenido de vuelta '+S.name,true);
+      addLog('Progreso importado desde archivo .json','lvlup');
+    }catch(err){
+      notify('⚠ Error al leer el archivo','',true);
+    }
+  };
+  reader.readAsText(file);
+  // Reset input so same file can be re-imported
+  e.target.value='';
+}
+
+// ═══════════════════════════════════════════════════════
 // AUTO-RESET DE MISIONES POR FECHA
 // ═══════════════════════════════════════════════════════
 function getDateKeys(){
@@ -1431,18 +1504,19 @@ function checkResets(){
   let changed=false;
   let msgs=[];
 
-  if(S.lastDay&&S.lastDay!==day){
-    // New day — reset daily missions
+  // Only reset if we have a saved date AND it's different from today
+  // If lastDay is null/undefined it means first visit — don't reset anything
+  if(S.lastDay && S.lastDay !== day){
     Object.keys(S.missions).filter(k=>k.startsWith('daily_')).forEach(k=>delete S.missions[k]);
     msgs.push('🌅 Misiones diarias reiniciadas automáticamente');
     changed=true;
   }
-  if(S.lastWeek&&S.lastWeek!==week){
+  if(S.lastWeek && S.lastWeek !== week){
     Object.keys(S.missions).filter(k=>k.startsWith('weekly_')).forEach(k=>delete S.missions[k]);
     msgs.push('📅 Misiones semanales reiniciadas automáticamente');
     changed=true;
   }
-  if(S.lastMonth&&S.lastMonth!==month){
+  if(S.lastMonth && S.lastMonth !== month){
     Object.keys(S.missions).filter(k=>k.startsWith('monthly_')).forEach(k=>delete S.missions[k]);
     msgs.push('🗓 Misiones mensuales reiniciadas automáticamente');
     changed=true;
