@@ -623,6 +623,7 @@ let S={
   stats:{INT:20,LOG:20,COD:20,SYS:10,DISC:15,EXP:10},
   skills:{},dungeons:{},missions:{},log:[],
   lastDay:null,lastWeek:null,lastMonth:null,
+  missionXP:0,
 };
 
 function load(){
@@ -638,6 +639,7 @@ function load(){
       S.skills=Object.assign({},saved.skills||{});
       S.dungeons=Object.assign({},saved.dungeons||{});
       S.missions=Object.assign({},saved.missions||{});
+      S.missionXP=saved.missionXP||0;
       S.log=saved.log||[];
       // Only restore dates if they exist in save — never default to null
       if(saved.lastDay) S.lastDay=saved.lastDay;
@@ -710,28 +712,17 @@ function calcTotalXP(){
   });
   // Dungeons
   DUNGEONS.forEach((d,i)=>{ if(S.dungeons[i]) xp+=d.xp; });
-  // Misiones — cada una suma su XP real
-  Object.entries(S.missions).forEach(([key,done])=>{
-    if(!done) return;
-    const [type,idx]=key.split('_');
-    const m=MISSIONS[type]&&MISSIONS[type][parseInt(idx)];
-    if(m) xp+=m.xp;
-  });
+  // Misiones — XP acumulada históricamente (no se pierde al reiniciar)
+  xp+=(S.missionXP||0);
   return xp;
 }
 
 // Desglosa XP por fuente (para mostrar en UI)
 function xpBreakdown(){
-  let skills=0,dungeons=0,missions=0;
+  let skills=0,dungeons=0;
   BRANCHES.forEach((br,bi)=>{ br.skills.forEach((sk,si)=>{ if(S.skills[bi+'_'+si]) skills+=sk.xp; }); });
   DUNGEONS.forEach((d,i)=>{ if(S.dungeons[i]) dungeons+=d.xp; });
-  Object.entries(S.missions).forEach(([key,done])=>{
-    if(!done) return;
-    const [type,idx]=key.split('_');
-    const m=MISSIONS[type]&&MISSIONS[type][parseInt(idx)];
-    if(m) missions+=m.xp;
-  });
-  return {skills,dungeons,missions};
+  return {skills,dungeons,missions:S.missionXP||0};
 }
 
 // XP necesaria para cada nivel — curva progresiva
@@ -1107,10 +1098,13 @@ function toggleMission(key){
   S.missions[key]=!S.missions[key];
   const[type,idx]=key.split('_');
   const m=MISSIONS[type]&&MISSIONS[type][parseInt(idx)];
+  if(!S.missionXP) S.missionXP=0;
   if(S.missions[key]&&m){
+    S.missionXP+=m.xp; // acumula permanentemente
     notify(`✅ ${m.t} +${m.xp} XP`);
     addLog(`📋 Misión completada: ${m.t} (+${m.xp} XP)`,'gain');
   } else if(m){
+    S.missionXP=Math.max(0,S.missionXP-m.xp); // solo resta si se desmarca manualmente
     addLog(`↩ Misión desmarcada: ${m.t} (-${m.xp} XP)`,'warn');
   }
   save();
@@ -1506,19 +1500,20 @@ function checkResets(){
 
   // Only reset if we have a saved date AND it's different from today
   // If lastDay is null/undefined it means first visit — don't reset anything
+  // Solo borra los checkmarks — missionXP acumulada NO se toca
   if(S.lastDay && S.lastDay !== day){
     Object.keys(S.missions).filter(k=>k.startsWith('daily_')).forEach(k=>delete S.missions[k]);
-    msgs.push('🌅 Misiones diarias reiniciadas automáticamente');
+    msgs.push('🌅 Misiones diarias reiniciadas — ¡a por otro día!');
     changed=true;
   }
   if(S.lastWeek && S.lastWeek !== week){
     Object.keys(S.missions).filter(k=>k.startsWith('weekly_')).forEach(k=>delete S.missions[k]);
-    msgs.push('📅 Misiones semanales reiniciadas automáticamente');
+    msgs.push('📅 Misiones semanales reiniciadas — ¡nueva semana!');
     changed=true;
   }
   if(S.lastMonth && S.lastMonth !== month){
     Object.keys(S.missions).filter(k=>k.startsWith('monthly_')).forEach(k=>delete S.missions[k]);
-    msgs.push('🗓 Misiones mensuales reiniciadas automáticamente');
+    msgs.push('🗓 Misiones mensuales reiniciadas — ¡nuevo mes!');
     changed=true;
   }
 
