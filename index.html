@@ -621,39 +621,40 @@ const MISSIONS={
 let S={
   name:'Jugador',level:1,
   stats:{INT:20,LOG:20,COD:20,SYS:10,DISC:15,EXP:10},
-  skills:{},dungeons:{},missions:{},log:[],
-  lastDay:null,lastWeek:null,lastMonth:null,
-  missionXP:0,
+  skills:{},        // permanent — never reset
+  dungeons:{},      // permanent — never reset
+  missions:{},      // checkmarks only — reset daily/weekly/monthly
+  log:[],
+  missionXP:0,      // cumulative XP from missions — NEVER reset
+  lastResetDay:null,
+  lastResetWeek:null,
+  lastResetMonth:null,
 };
 
 function load(){
   try{
-    const d=localStorage.getItem('rpg_sys_v2');
-    if(d){
-      const saved=JSON.parse(d);
-      // Deep merge — preserve all nested objects
-      S.name=saved.name||S.name;
-      S.level=saved.level||S.level;
-      S.stats=Object.assign({},S.stats,saved.stats||{});
-      S.statBonus=Object.assign({},saved.statBonus||{});
-      S.skills=Object.assign({},saved.skills||{});
-      S.dungeons=Object.assign({},saved.dungeons||{});
-      S.missions=Object.assign({},saved.missions||{});
-      S.missionXP=saved.missionXP||0;
-      S.log=saved.log||[];
-      // Only restore dates if they exist in save — never default to null
-      if(saved.lastDay) S.lastDay=saved.lastDay;
-      if(saved.lastWeek) S.lastWeek=saved.lastWeek;
-      if(saved.lastMonth) S.lastMonth=saved.lastMonth;
-    }
+    const raw=localStorage.getItem('rpg_sys_v2');
+    if(!raw) return;
+    const sv=JSON.parse(raw);
+    if(typeof sv!=='object') return;
+    // Restore permanent progress
+    if(sv.name)     S.name=sv.name;
+    if(sv.skills)   S.skills=sv.skills;
+    if(sv.dungeons) S.dungeons=sv.dungeons;
+    if(sv.log)      S.log=sv.log;
+    if(sv.statBonus)S.statBonus=sv.statBonus;
+    // missionXP is permanent — restore exactly
+    S.missionXP=typeof sv.missionXP==='number'?sv.missionXP:0;
+    // missions checkmarks — restore for reset comparison
+    if(sv.missions) S.missions=sv.missions;
+    // Reset date markers
+    S.lastResetDay  =sv.lastResetDay  ||null;
+    S.lastResetWeek =sv.lastResetWeek ||null;
+    S.lastResetMonth=sv.lastResetMonth||null;
   }catch(e){console.warn('Load error:',e);}
 }
 function save(){
   try{
-    const{day,week,month}=getDateKeys();
-    S.lastDay=day;
-    S.lastWeek=week;
-    S.lastMonth=month;
     localStorage.setItem('rpg_sys_v2',JSON.stringify(S));
   }catch(e){console.warn('Save error:',e);}
 }
@@ -1095,16 +1096,19 @@ function toggleDungeon(i){
 }
 
 function toggleMission(key){
-  S.missions[key]=!S.missions[key];
+  const wasOn=!!S.missions[key];
+  S.missions[key]=!wasOn;
   const[type,idx]=key.split('_');
   const m=MISSIONS[type]&&MISSIONS[type][parseInt(idx)];
-  if(!S.missionXP) S.missionXP=0;
-  if(S.missions[key]&&m){
-    S.missionXP+=m.xp; // acumula permanentemente
+  if(!m) return;
+  if(!wasOn){
+    // Completing — add XP permanently
+    S.missionXP=(S.missionXP||0)+m.xp;
     notify(`✅ ${m.t} +${m.xp} XP`);
     addLog(`📋 Misión completada: ${m.t} (+${m.xp} XP)`,'gain');
-  } else if(m){
-    S.missionXP=Math.max(0,S.missionXP-m.xp); // solo resta si se desmarca manualmente
+  } else {
+    // Unchecking manually — remove XP
+    S.missionXP=Math.max(0,(S.missionXP||0)-m.xp);
     addLog(`↩ Misión desmarcada: ${m.t} (-${m.xp} XP)`,'warn');
   }
   save();
@@ -1495,37 +1499,30 @@ function getDateKeys(){
 
 function checkResets(){
   const{day,week,month}=getDateKeys();
-  let changed=false;
-  let msgs=[];
+  const msgs=[];
 
-  // Only reset if we have a saved date AND it's different from today
-  // If lastDay is null/undefined it means first visit — don't reset anything
-  // Solo borra los checkmarks — missionXP acumulada NO se toca
-  if(S.lastDay && S.lastDay !== day){
-    Object.keys(S.missions).filter(k=>k.startsWith('daily_')).forEach(k=>delete S.missions[k]);
-    msgs.push('🌅 Misiones diarias reiniciadas — ¡a por otro día!');
-    changed=true;
+  // Only reset checkmarks — missionXP is NEVER touched here
+  // lastResetDay=null means first visit, skip reset
+  if(S.lastResetDay && S.lastResetDay!==day){
+    Object.keys(S.missions).filter(k=>k.startsWith('daily_')).forEach(k=>{delete S.missions[k];});
+    msgs.push('🌅 Misiones diarias reiniciadas — ¡nuevo día!');
   }
-  if(S.lastWeek && S.lastWeek !== week){
-    Object.keys(S.missions).filter(k=>k.startsWith('weekly_')).forEach(k=>delete S.missions[k]);
+  if(S.lastResetWeek && S.lastResetWeek!==week){
+    Object.keys(S.missions).filter(k=>k.startsWith('weekly_')).forEach(k=>{delete S.missions[k];});
     msgs.push('📅 Misiones semanales reiniciadas — ¡nueva semana!');
-    changed=true;
   }
-  if(S.lastMonth && S.lastMonth !== month){
-    Object.keys(S.missions).filter(k=>k.startsWith('monthly_')).forEach(k=>delete S.missions[k]);
+  if(S.lastResetMonth && S.lastResetMonth!==month){
+    Object.keys(S.missions).filter(k=>k.startsWith('monthly_')).forEach(k=>{delete S.missions[k];});
     msgs.push('🗓 Misiones mensuales reiniciadas — ¡nuevo mes!');
-    changed=true;
   }
 
-  // Update last seen dates
-  S.lastDay=day;
-  S.lastWeek=week;
-  S.lastMonth=month;
+  // Update markers to current period
+  S.lastResetDay  =day;
+  S.lastResetWeek =week;
+  S.lastResetMonth=month;
 
-  if(changed){
-    msgs.forEach(m=>addLog(m,'gain'));
-    save();
-  }
+  msgs.forEach(m=>addLog(m,'gain'));
+  save();
 }
 
 // ═══════════════════════════════════════════════════════
